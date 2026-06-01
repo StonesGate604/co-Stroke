@@ -1,0 +1,76 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>co-Stroke</title>
+  <script src="https://cdn.jsdelivr.net/npm/lucide@latest/dist/umd/lucide.min.js"></script>
+  <link rel="stylesheet" href="../src/styles.css">
+</head>
+<body>
+  <div id="topbar">
+    <span class="app-name">CO-STROKE</span>
+    <button class="top-btn" id="loadExampleButton" title="Load example"><i data-lucide="folder-open"></i> Load</button>
+    <button class="top-btn" id="exportButton" title="Export JSON"><i data-lucide="download"></i> Export</button>
+    <button class="top-btn" id="undoButton" title="Undo latest stroke"><i data-lucide="undo-2"></i> Undo</button>
+    <button class="top-btn" id="clearButton" title="Clear drawing"><i data-lucide="trash-2"></i> Clear</button>
+  </div>
+
+  <div id="toolbar">
+    <button class="tool-btn selected" id="penToolButton" title="Pen"><i data-lucide="pencil">P</i></button>
+    <button class="tool-btn" id="eraserToolButton" title="Eraser"><i data-lucide="eraser">E</i></button>
+    <div class="tool-sep"></div>
+    <button class="tool-btn" id="playButton" title="Play"><i data-lucide="play">P</i></button>
+    <button class="tool-btn" id="pauseButton" title="Pause"><i data-lucide="pause">II</i></button>
+    <button class="tool-btn" id="resetButton" title="Reset"><i data-lucide="rotate-ccw">R</i></button>
+  </div>
+
+  <main id="canvas-area">
+    <canvas id="drawingCanvas" width="960" height="640"></canvas>
+  </main>
+
+  <aside id="controls">
+    <section class="panel-section">
+      <div class="section-title">Stroke Style</div>
+      <div class="style-legend">
+        <div><span class="style-swatch human-swatch"></span><span>Human stroke</span></div>
+        <div><span class="style-swatch ai-swatch"></span><span>AI stroke</span></div>
+      </div>
+    </section>
+
+    <section class="panel-section">
+      <div class="section-title">Sequence</div>
+      <div class="info-grid">
+        <div><span>Title</span><strong id="titleStat">none</strong></div>
+        <div><span>Category</span><strong id="categoryStat">none</strong></div>
+        <div><span>Step</span><strong id="stepStat">0 / 0</strong></div>
+        <div><span>Author</span><strong id="authorStat">none</strong></div>
+      </div>
+    </section>
+
+    <section class="panel-section">
+      <div class="section-title">AI Continuation</div>
+      <button class="action-btn" id="aiStepButton"><i data-lucide="sparkles"></i> Mock AI Stroke</button>
+      <div class="hint-text">Reserved for your trained autoregressive stroke model.</div>
+    </section>
+  </aside>
+
+  <section id="timeline-bar">
+    <div class="tl-header">
+      <span class="tl-title">Timeline</span>
+      <span id="tl-label">step 0</span>
+    </div>
+    <div class="tl-track">
+      <div id="tl-icons"></div>
+      <input id="timeline" type="range" min="0" max="0" value="0">
+      <div id="tl-cursor" style="left:0"></div>
+    </div>
+  </section>
+
+  <script type="module" src="../src/app.js"></script>
+</body>
+</html>
+
+
+
+

@@ -1,0 +1,69 @@
+﻿{
+  "schema": "https://co-stroke.local/schema/co-stroke-v0.1.json",
+  "version": "0.1.0",
+  "id": "drawing_simple_house_001",
+  "title": "simple-house",
+  "category": "house",
+  "createdAt": "2026-06-01T00:00:00.000Z",
+  "updatedAt": "2026-06-01T00:00:00.000Z",
+  "source": {
+    "type": "example",
+    "name": "hand-authored sample"
+  },
+  "canvas": {
+    "width": 960,
+    "height": 640,
+    "coordinateSystem": "normalized",
+    "background": "#ffffff"
+  },
+  "timeline": {
+    "unit": "stroke",
+    "currentStep": 0,
+    "branchPolicy": "truncate-future-on-edit"
+  },
+  "strokes": [
+    {
+      "id": "stroke_001",
+      "author": { "type": "dataset", "id": "example" },
+      "tool": "pen",
+      "style": { "color": "#111111", "width": 4, "opacity": 1, "lineCap": "round", "lineJoin": "round" },
+      "timing": { "startMs": 0, "durationMs": 400 },
+      "points": [
+        { "x": 0.25, "y": 0.70, "t": 0, "p": 0.5 },
+        { "x": 0.25, "y": 0.45, "t": 100, "p": 0.5 },
+        { "x": 0.55, "y": 0.45, "t": 200, "p": 0.5 },
+        { "x": 0.55, "y": 0.70, "t": 300, "p": 0.5 },
+        { "x": 0.25, "y": 0.70, "t": 400, "p": 0.5 }
+      ],
+      "metadata": { "label": "house body" }
+    },
+    {
+      "id": "stroke_002",
+      "author": { "type": "dataset", "id": "example" },
+      "tool": "pen",
+      "style": { "color": "#111111", "width": 4, "opacity": 1, "lineCap": "round", "lineJoin": "round" },
+      "timing": { "startMs": 450, "durationMs": 300 },
+      "points": [
+        { "x": 0.20, "y": 0.45, "t": 0, "p": 0.5 },
+        { "x": 0.40, "y": 0.25, "t": 150, "p": 0.5 },
+        { "x": 0.60, "y": 0.45, "t": 300, "p": 0.5 }
+      ],
+      "metadata": { "label": "roof" }
+    },
+    {
+      "id": "stroke_003",
+      "author": { "type": "human", "id": "local-user" },
+      "tool": "pen",
+      "style": { "color": "#111111", "width": 4, "opacity": 1, "lineCap": "round", "lineJoin": "round" },
+      "timing": { "startMs": 800, "durationMs": 300 },
+      "points": [
+        { "x": 0.36, "y": 0.70, "t": 0, "p": 0.5 },
+        { "x": 0.36, "y": 0.56, "t": 100, "p": 0.5 },
+        { "x": 0.44, "y": 0.56, "t": 200, "p": 0.5 },
+        { "x": 0.44, "y": 0.70, "t": 300, "p": 0.5 }
+      ],
+      "metadata": { "label": "door" }
+    }
+  ]
+}
+

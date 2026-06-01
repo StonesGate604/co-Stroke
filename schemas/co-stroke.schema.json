@@ -1,0 +1,111 @@
+﻿{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://co-stroke.local/schema/co-stroke-v0.1.json",
+  "title": "co-stroke.json v0.1",
+  "type": "object",
+  "required": ["version", "id", "title", "canvas", "strokes"],
+  "additionalProperties": true,
+  "properties": {
+    "schema": { "type": "string" },
+    "version": { "const": "0.1.0" },
+    "id": { "type": "string", "minLength": 1 },
+    "title": { "type": "string" },
+    "category": { "type": "string" },
+    "createdAt": { "type": "string" },
+    "updatedAt": { "type": "string" },
+    "source": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "type": { "enum": ["example", "quickdraw", "human-session", "generated", "imported"] },
+        "name": { "type": "string" },
+        "url": { "type": "string" }
+      }
+    },
+    "canvas": {
+      "type": "object",
+      "required": ["width", "height", "coordinateSystem"],
+      "additionalProperties": true,
+      "properties": {
+        "width": { "type": "number", "exclusiveMinimum": 0 },
+        "height": { "type": "number", "exclusiveMinimum": 0 },
+        "coordinateSystem": { "const": "normalized" },
+        "background": { "type": "string" }
+      }
+    },
+    "timeline": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "unit": { "const": "stroke" },
+        "currentStep": { "type": "integer", "minimum": 0 },
+        "branchPolicy": { "enum": ["truncate-future-on-edit", "branch-later"] }
+      }
+    },
+    "strokes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/stroke" }
+    }
+  },
+  "$defs": {
+    "stroke": {
+      "type": "object",
+      "required": ["id", "author", "tool", "style", "points"],
+      "additionalProperties": true,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "author": {
+          "type": "object",
+          "required": ["type"],
+          "additionalProperties": true,
+          "properties": {
+            "type": { "enum": ["human", "ai", "dataset", "robot"] },
+            "id": { "type": "string" },
+            "model": { "type": "string" }
+          }
+        },
+        "tool": { "enum": ["pen", "eraser"] },
+        "style": {
+          "type": "object",
+          "required": ["color", "width"],
+          "additionalProperties": true,
+          "properties": {
+            "color": { "type": "string" },
+            "width": { "type": "number", "exclusiveMinimum": 0 },
+            "opacity": { "type": "number", "minimum": 0, "maximum": 1 },
+            "lineCap": { "enum": ["round", "butt", "square"] },
+            "lineJoin": { "enum": ["round", "bevel", "miter"] }
+          }
+        },
+        "timing": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "startMs": { "type": "number", "minimum": 0 },
+            "durationMs": { "type": "number", "minimum": 0 }
+          }
+        },
+        "points": {
+          "type": "array",
+          "minItems": 2,
+          "items": { "$ref": "#/$defs/point" }
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "point": {
+      "type": "object",
+      "required": ["x", "y"],
+      "additionalProperties": true,
+      "properties": {
+        "x": { "type": "number", "minimum": 0, "maximum": 1 },
+        "y": { "type": "number", "minimum": 0, "maximum": 1 },
+        "t": { "type": "number", "minimum": 0 },
+        "p": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    }
+  }
+}
