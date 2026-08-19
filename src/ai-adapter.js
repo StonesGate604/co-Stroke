@@ -33,7 +33,37 @@ export class MockStrokeModelAdapter {
   }
 }
 
-export async function requestAIContinuation(request, adapter = new MockStrokeModelAdapter()) {
+export class LocalStrokeModelAdapter {
+  constructor({ endpoint = "http://127.0.0.1:8787/continue", fallback = new MockStrokeModelAdapter() } = {}) {
+    this.endpoint = endpoint;
+    this.fallback = fallback;
+  }
+
+  async continue(request) {
+    try {
+      const response = await fetch(this.endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request)
+      });
+
+      if (!response.ok) {
+        throw new Error(`Local model server returned ${response.status}`);
+      }
+
+      const result = await response.json();
+      if (!Array.isArray(result.strokes)) {
+        throw new Error("Local model response did not include strokes.");
+      }
+      return result;
+    } catch (error) {
+      console.warn("Local stroke model unavailable; using mock continuation.", error);
+      return this.fallback.continue(request);
+    }
+  }
+}
+
+export async function requestAIContinuation(request, adapter = new LocalStrokeModelAdapter()) {
   return adapter.continue(request);
 }
 

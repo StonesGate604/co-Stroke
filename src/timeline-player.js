@@ -86,7 +86,23 @@
 
     const firstPoint = points[0];
     this.ctx.moveTo(firstPoint.x * this.canvas.width, firstPoint.y * this.canvas.height);
-    points.slice(1).forEach((point) => this.ctx.lineTo(point.x * this.canvas.width, point.y * this.canvas.height));
+    if (points.length === 2) {
+      const point = points[1];
+      this.ctx.lineTo(point.x * this.canvas.width, point.y * this.canvas.height);
+    } else {
+      for (let index = 1; index < points.length - 1; index += 1) {
+        const point = points[index];
+        const nextPoint = points[index + 1];
+        const controlX = point.x * this.canvas.width;
+        const controlY = point.y * this.canvas.height;
+        const midpointX = ((point.x + nextPoint.x) / 2) * this.canvas.width;
+        const midpointY = ((point.y + nextPoint.y) / 2) * this.canvas.height;
+        this.ctx.quadraticCurveTo(controlX, controlY, midpointX, midpointY);
+      }
+
+      const lastPoint = points[points.length - 1];
+      this.ctx.lineTo(lastPoint.x * this.canvas.width, lastPoint.y * this.canvas.height);
+    }
     this.ctx.stroke();
     this.ctx.restore();
   }

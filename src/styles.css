@@ -252,6 +252,28 @@ button {
   background: var(--hover);
 }
 
+.action-btn:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.context-stat {
+  margin-top: 8px;
+  padding: 7px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #171717;
+  color: var(--accent2);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.context-stat.compacted {
+  border-color: rgba(255, 170, 68, 0.45);
+  color: var(--dataset);
+}
+
 .hint-text {
   margin-top: 8px;
   color: var(--muted);
