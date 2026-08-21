@@ -59,15 +59,22 @@ from train_stroke_relational_v4 import (  # noqa: E402
     co_stroke_to_v4_tensor,
     sample_v4_stroke,
 )
+from train_stroke_multimodal_v41 import (  # noqa: E402
+    StrokeMultimodalV41,
+    TrainConfig as StrokeMultimodalTrainConfig,
+    rasterize_context,
+    sample_v41_stroke,
+)
 
 
-DEFAULT_CHECKPOINT = "runs/stroke-relational-v4-cat/checkpoint.pt"
+DEFAULT_CHECKPOINT = "runs/stroke-multimodal-v41-cat/checkpoint.pt"
 V3_CONTEXT_POLICY = "human-priority-v3.1"
 V3_HUMAN_ACTION_BUDGET = 120
 V3_RECENT_AI_STROKES = 6
 V3_HUMAN_POINTS_PER_STROKE = 16
 V3_AI_POINTS_PER_STROKE = 12
 V4_CONTEXT_POLICY = "stroke-relational-human-priority-v4.0.1"
+V41_CONTEXT_POLICY = "stroke-multimodal-human-priority-v4.1"
 V4_RECENT_AI_STROKES = 6
 V4_CANDIDATES = 16
 
@@ -348,6 +355,38 @@ class StrokeRelationalV4Runtime:
         self.model_type = "stroke-relational-v4"
         self.context_policy = V4_CONTEXT_POLICY
 
+    def make_model_inputs(
+        self,
+        context_strokes: list[dict[str, Any]],
+        *,
+        visible_stroke_count: int,
+        canvas_width: float,
+        canvas_height: float,
+    ) -> dict[str, torch.Tensor]:
+        return make_v4_model_inputs(
+            context_strokes,
+            visible_stroke_count=visible_stroke_count,
+            points_per_stroke=self.config.points_per_stroke,
+            canvas_width=canvas_width,
+            canvas_height=canvas_height,
+            device=self.device,
+        )
+
+    def sample_candidate(
+        self,
+        model_inputs: dict[str, torch.Tensor],
+        *,
+        temperature: float,
+    ) -> tuple[torch.Tensor, float]:
+        return sample_v4_stroke(
+            self.model,
+            model_inputs["context_points"],
+            model_inputs["context_authors"],
+            model_inputs["context_order"],
+            model_inputs["context_mask"],
+            temperature=temperature,
+        )
+
     @torch.no_grad()
     def continue_drawing(
         self,
@@ -366,14 +405,13 @@ class StrokeRelationalV4Runtime:
             visible_strokes,
             max_strokes=self.config.max_context_strokes,
         )
+        context_stats["policy"] = self.context_policy
         canvas_width, canvas_height = drawing_canvas_size(drawing)
-        model_inputs = make_v4_model_inputs(
+        model_inputs = self.make_model_inputs(
             context_strokes,
             visible_stroke_count=len(visible_strokes),
-            points_per_stroke=self.config.points_per_stroke,
             canvas_width=canvas_width,
             canvas_height=canvas_height,
-            device=self.device,
         )
 
         reference_strokes = [
@@ -387,12 +425,8 @@ class StrokeRelationalV4Runtime:
         candidate_count = max(8, min(V4_CANDIDATES, max(1, steps // 4)))
         candidates: list[dict[str, Any]] = []
         for _ in range(candidate_count):
-            tensor, confidence = sample_v4_stroke(
-                self.model,
-                model_inputs["context_points"],
-                model_inputs["context_authors"],
-                model_inputs["context_order"],
-                model_inputs["context_mask"],
+            tensor, confidence = self.sample_candidate(
+                model_inputs,
                 temperature=temperature,
             )
             points = tensor_to_co_points(
@@ -445,6 +479,65 @@ class StrokeRelationalV4Runtime:
             "strokes": [stroke],
             "context": context_stats,
         }
+
+
+class StrokeMultimodalV41Runtime(StrokeRelationalV4Runtime):
+    """Runtime for v4.1 vector/raster partial-canvas completion."""
+
+    def __init__(self, checkpoint: dict[str, Any], checkpoint_path: Path, device_name: str) -> None:
+        checkpoint_config = checkpoint.get("config", {})
+        allowed = {field.name for field in fields(StrokeMultimodalTrainConfig)}
+        config_values = {key: value for key, value in checkpoint_config.items() if key in allowed}
+        config_values["device"] = device_name
+        self.config = StrokeMultimodalTrainConfig(**config_values)
+        self.device = torch.device(device_name)
+        self.model = StrokeMultimodalV41(self.config).to(self.device)
+        self.model.load_state_dict(checkpoint["model"])
+        self.model.eval()
+        self.checkpoint_path = checkpoint_path
+        self.name = "local-stroke-multimodal-v4.1-cat"
+        self.version = f"epoch-{checkpoint.get('epoch', 'unknown')}"
+        self.model_type = "stroke-multimodal-v4.1"
+        self.context_policy = V41_CONTEXT_POLICY
+
+    def make_model_inputs(
+        self,
+        context_strokes: list[dict[str, Any]],
+        *,
+        visible_stroke_count: int,
+        canvas_width: float,
+        canvas_height: float,
+    ) -> dict[str, torch.Tensor]:
+        inputs = super().make_model_inputs(
+            context_strokes,
+            visible_stroke_count=visible_stroke_count,
+            canvas_width=canvas_width,
+            canvas_height=canvas_height,
+        )
+        raster = rasterize_context(
+            inputs["context_points"][0],
+            inputs["context_authors"][0],
+            inputs["context_order"][0],
+            raster_size=self.config.raster_size,
+        )
+        inputs["context_raster"] = raster.unsqueeze(0)
+        return inputs
+
+    def sample_candidate(
+        self,
+        model_inputs: dict[str, torch.Tensor],
+        *,
+        temperature: float,
+    ) -> tuple[torch.Tensor, float]:
+        return sample_v41_stroke(
+            self.model,
+            model_inputs["context_points"],
+            model_inputs["context_authors"],
+            model_inputs["context_order"],
+            model_inputs["context_mask"],
+            model_inputs["context_raster"],
+            temperature=temperature,
+        )
 
 
 class PrimitiveModelRuntime:
@@ -1240,9 +1333,11 @@ def sample_from_logits(logits: torch.Tensor, temperature: float, top_k: int | No
 def load_runtime(
     checkpoint_path: Path,
     device_name: str,
-) -> StrokeTransformerRuntime | Stroke5TransformerRuntime | StrokeRelationalV4Runtime | PrimitiveModelRuntime:
+) -> StrokeTransformerRuntime | Stroke5TransformerRuntime | StrokeRelationalV4Runtime | StrokeMultimodalV41Runtime | PrimitiveModelRuntime:
     checkpoint = torch.load(checkpoint_path, map_location=device_name, weights_only=False)
     model_type = checkpoint.get("model_type", "stroke-transformer")
+    if model_type == "stroke-multimodal-v4.1":
+        return StrokeMultimodalV41Runtime(checkpoint, checkpoint_path, device_name)
     if model_type == "stroke-relational-v4":
         return StrokeRelationalV4Runtime(checkpoint, checkpoint_path, device_name)
     if model_type == "stroke5-transformer-v3":
@@ -1253,7 +1348,7 @@ def load_runtime(
 
 
 def make_handler(
-    runtime: StrokeTransformerRuntime | Stroke5TransformerRuntime | StrokeRelationalV4Runtime | PrimitiveModelRuntime,
+    runtime: StrokeTransformerRuntime | Stroke5TransformerRuntime | StrokeRelationalV4Runtime | StrokeMultimodalV41Runtime | PrimitiveModelRuntime,
 ) -> type[BaseHTTPRequestHandler]:
     class StrokeModelHandler(BaseHTTPRequestHandler):
         def do_OPTIONS(self) -> None:
