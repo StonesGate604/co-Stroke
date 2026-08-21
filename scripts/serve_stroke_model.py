@@ -51,14 +51,25 @@ from train_stroke5_transformer import (  # noqa: E402
     sample_next_action as sample_next_stroke5_action,
     stroke5_to_polylines,
 )
+from train_stroke_relational_v4 import (  # noqa: E402
+    AUTHOR_AI as V4_AUTHOR_AI,
+    AUTHOR_HUMAN as V4_AUTHOR_HUMAN,
+    StrokeRelationalTransformer,
+    TrainConfig as StrokeRelationalTrainConfig,
+    co_stroke_to_v4_tensor,
+    sample_v4_stroke,
+)
 
 
-DEFAULT_CHECKPOINT = "runs/stroke5-transformer-v3-cat/checkpoint.pt"
+DEFAULT_CHECKPOINT = "runs/stroke-relational-v4-cat/checkpoint.pt"
 V3_CONTEXT_POLICY = "human-priority-v3.1"
 V3_HUMAN_ACTION_BUDGET = 120
 V3_RECENT_AI_STROKES = 6
 V3_HUMAN_POINTS_PER_STROKE = 16
 V3_AI_POINTS_PER_STROKE = 12
+V4_CONTEXT_POLICY = "stroke-relational-human-priority-v4.0.1"
+V4_RECENT_AI_STROKES = 6
+V4_CANDIDATES = 16
 
 
 class StrokeTransformerRuntime:
@@ -318,6 +329,124 @@ class Stroke5TransformerRuntime:
         return generated
 
 
+class StrokeRelationalV4Runtime:
+    """Runtime for the stroke-level relational completion model v4."""
+
+    def __init__(self, checkpoint: dict[str, Any], checkpoint_path: Path, device_name: str) -> None:
+        checkpoint_config = checkpoint.get("config", {})
+        allowed = {field.name for field in fields(StrokeRelationalTrainConfig)}
+        config_values = {key: value for key, value in checkpoint_config.items() if key in allowed}
+        config_values["device"] = device_name
+        self.config = StrokeRelationalTrainConfig(**config_values)
+        self.device = torch.device(device_name)
+        self.model = StrokeRelationalTransformer(self.config).to(self.device)
+        self.model.load_state_dict(checkpoint["model"])
+        self.model.eval()
+        self.checkpoint_path = checkpoint_path
+        self.name = "local-stroke-relational-v4-cat"
+        self.version = f"epoch-{checkpoint.get('epoch', 'unknown')}"
+        self.model_type = "stroke-relational-v4"
+        self.context_policy = V4_CONTEXT_POLICY
+
+    @torch.no_grad()
+    def continue_drawing(
+        self,
+        drawing: dict[str, Any],
+        current_step: int,
+        *,
+        steps: int,
+        temperature: float,
+        max_strokes: int,
+        max_points_per_stroke: int,
+        style: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        del max_strokes  # V4 intentionally contributes one complete stroke per turn.
+        visible_strokes = drawing.get("strokes", [])[:current_step]
+        context_strokes, context_stats = pack_v4_context(
+            visible_strokes,
+            max_strokes=self.config.max_context_strokes,
+        )
+        canvas_width, canvas_height = drawing_canvas_size(drawing)
+        model_inputs = make_v4_model_inputs(
+            context_strokes,
+            visible_stroke_count=len(visible_strokes),
+            points_per_stroke=self.config.points_per_stroke,
+            canvas_width=canvas_width,
+            canvas_height=canvas_height,
+            device=self.device,
+        )
+
+        reference_strokes = [
+            stroke for stroke in visible_strokes
+            if stroke.get("tool", "pen") == "pen" and len(stroke.get("points", [])) >= 2
+        ]
+        last_human = next(
+            (stroke for stroke in reversed(reference_strokes) if stroke_author_type(stroke) != "ai"),
+            None,
+        )
+        candidate_count = max(8, min(V4_CANDIDATES, max(1, steps // 4)))
+        candidates: list[dict[str, Any]] = []
+        for _ in range(candidate_count):
+            tensor, confidence = sample_v4_stroke(
+                self.model,
+                model_inputs["context_points"],
+                model_inputs["context_authors"],
+                model_inputs["context_order"],
+                model_inputs["context_mask"],
+                temperature=temperature,
+            )
+            points = tensor_to_co_points(
+                tensor[0],
+                max_points=max_points_per_stroke,
+                canvas_width=canvas_width,
+                canvas_height=canvas_height,
+            )
+            metrics = score_v4_candidate(
+                points,
+                reference_strokes,
+                last_human,
+                confidence=confidence,
+            )
+            candidates.append({
+                "points": points,
+                "confidence": confidence,
+                **metrics,
+            })
+
+        best = max(candidates, key=lambda candidate: candidate["score"])
+        color = (style or {}).get("color", "#ff44aa")
+        width = (style or {}).get("width", 4)
+        stroke = make_stroke(
+            best["points"],
+            0,
+            current_step,
+            color,
+            width,
+            model_name=self.name,
+        )
+        stroke["metadata"].update({
+            "candidateCount": candidate_count,
+            "candidateScore": round(float(best["score"]), 6),
+            "overlap": round(float(best["overlap"]), 6),
+            "humanOverlap": round(float(best["humanOverlap"]), 6),
+            "endpointDistance": round(float(best["endpointDistance"]), 6),
+            "nearestDistance": round(float(best["nearestDistance"]), 6),
+        })
+        context_stats.update({
+            "candidateCount": candidate_count,
+            "selectedOverlap": round(float(best["overlap"]), 6),
+            "selectedHumanOverlap": round(float(best["humanOverlap"]), 6),
+            "selectedEndpointDistance": round(float(best["endpointDistance"]), 6),
+            "selectedNearestDistance": round(float(best["nearestDistance"]), 6),
+            "canvasMapping": "letterbox-square-v1",
+        })
+        return {
+            "model": {"name": self.name, "version": self.version, "type": self.model_type},
+            "strokes": [stroke],
+            "context": context_stats,
+        }
+
+
 class PrimitiveModelRuntime:
     def __init__(self, checkpoint: dict[str, Any], checkpoint_path: Path, device_name: str) -> None:
         checkpoint_config = checkpoint.get("config", {})
@@ -558,6 +687,324 @@ def resample_polyline(points: list[dict[str, Any]], max_points: int) -> list[dic
     return sampled
 
 
+def pack_v4_context(
+    strokes: list[dict[str, Any]],
+    *,
+    max_strokes: int,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Protect human geometry while packing a stroke-level v4 context."""
+    usable: list[dict[str, Any]] = []
+    ignored_erasers = 0
+    for index, stroke in enumerate(strokes):
+        if stroke.get("tool", "pen") != "pen":
+            ignored_erasers += 1
+            continue
+        if len(stroke.get("points", [])) < 2:
+            continue
+        usable.append({
+            "index": index,
+            "author": stroke_author_type(stroke),
+            "stroke": stroke,
+        })
+
+    human_entries = [entry for entry in usable if entry["author"] != "ai"]
+    ai_entries = [entry for entry in usable if entry["author"] == "ai"]
+    selected_ai = ai_entries[-min(V4_RECENT_AI_STROKES, max_strokes):]
+    human_capacity = max(0, max_strokes - len(selected_ai))
+    if human_capacity <= 0:
+        selected_human = []
+    elif len(human_entries) <= human_capacity:
+        selected_human = human_entries
+    else:
+        selected_human = evenly_spaced_entries(human_entries, human_capacity)
+    selected = sorted([*selected_human, *selected_ai], key=lambda entry: entry["index"])
+
+    packed: list[dict[str, Any]] = []
+    for entry in selected:
+        copy = dict(entry["stroke"])
+        copy["_contextIndex"] = entry["index"]
+        packed.append(copy)
+
+    stats = {
+        "policy": V4_CONTEXT_POLICY,
+        "unit": "strokes",
+        "maxActions": max_strokes,
+        "visibleStrokes": len(usable),
+        "humanStrokes": len(human_entries),
+        "aiStrokes": len(ai_entries),
+        "humanStrokesUsed": len(selected_human),
+        "aiStrokesUsed": len(selected_ai),
+        # Keep the v3-compatible fields so the existing browser summary works.
+        "humanActionsBefore": len(human_entries),
+        "aiActionsBefore": len(ai_entries),
+        "humanActionsUsed": len(selected_human),
+        "aiActionsUsed": len(selected_ai),
+        "totalActionsUsed": len(selected),
+        "droppedAIStrokes": len(ai_entries) - len(selected_ai),
+        "ignoredEraserStrokes": ignored_erasers,
+        "compacted": len(selected) < len(usable) or ignored_erasers > 0,
+    }
+    return packed, stats
+
+
+def drawing_canvas_size(drawing: dict[str, Any]) -> tuple[float, float]:
+    canvas = drawing.get("canvas", {})
+    width = float(canvas.get("width", 960) or 960)
+    height = float(canvas.get("height", 640) or 640)
+    if not math.isfinite(width) or width <= 0:
+        width = 960.0
+    if not math.isfinite(height) or height <= 0:
+        height = 640.0
+    return width, height
+
+
+def browser_to_model_point(
+    x: float,
+    y: float,
+    *,
+    canvas_width: float,
+    canvas_height: float,
+) -> tuple[float, float]:
+    """Letterbox browser-normalized coordinates into a square model space."""
+    side = max(canvas_width, canvas_height)
+    padding_x = (side - canvas_width) * 0.5
+    padding_y = (side - canvas_height) * 0.5
+    return (
+        (clamp(x, 0.0, 1.0) * canvas_width + padding_x) / side,
+        (clamp(y, 0.0, 1.0) * canvas_height + padding_y) / side,
+    )
+
+
+def model_to_browser_point(
+    x: float,
+    y: float,
+    *,
+    canvas_width: float,
+    canvas_height: float,
+) -> tuple[float, float]:
+    """Undo square letterboxing and return browser-normalized coordinates."""
+    side = max(canvas_width, canvas_height)
+    padding_x = (side - canvas_width) * 0.5
+    padding_y = (side - canvas_height) * 0.5
+    return (
+        (x * side - padding_x) / canvas_width,
+        (y * side - padding_y) / canvas_height,
+    )
+
+
+def stroke_to_square_model_space(
+    stroke: dict[str, Any],
+    *,
+    canvas_width: float,
+    canvas_height: float,
+) -> dict[str, Any]:
+    converted = dict(stroke)
+    converted["points"] = [
+        point_to_square_model_space(
+            point,
+            canvas_width=canvas_width,
+            canvas_height=canvas_height,
+        )
+        for point in stroke.get("points", [])
+    ]
+    return converted
+
+
+def point_to_square_model_space(
+    point: dict[str, Any],
+    *,
+    canvas_width: float,
+    canvas_height: float,
+) -> dict[str, Any]:
+    x, y = browser_to_model_point(
+        float(point.get("x", 0.0)),
+        float(point.get("y", 0.0)),
+        canvas_width=canvas_width,
+        canvas_height=canvas_height,
+    )
+    return {**point, "x": x, "y": y}
+
+
+def make_v4_model_inputs(
+    context_strokes: list[dict[str, Any]],
+    *,
+    visible_stroke_count: int,
+    points_per_stroke: int,
+    canvas_width: float,
+    canvas_height: float,
+    device: torch.device,
+) -> dict[str, torch.Tensor]:
+    if context_strokes:
+        points = torch.stack([
+            co_stroke_to_v4_tensor(
+                stroke_to_square_model_space(
+                    stroke,
+                    canvas_width=canvas_width,
+                    canvas_height=canvas_height,
+                ),
+                points_per_stroke,
+            )
+            for stroke in context_strokes
+        ]).unsqueeze(0).to(device)
+        authors = torch.tensor([[
+            V4_AUTHOR_AI if stroke_author_type(stroke) == "ai" else V4_AUTHOR_HUMAN
+            for stroke in context_strokes
+        ]], dtype=torch.long, device=device)
+        denominator = max(visible_stroke_count - 1, 1)
+        order = torch.tensor([[
+            float(stroke.get("_contextIndex", index)) / denominator
+            for index, stroke in enumerate(context_strokes)
+        ]], dtype=torch.float32, device=device)
+        mask = torch.ones((1, len(context_strokes)), dtype=torch.bool, device=device)
+    else:
+        points = torch.zeros((1, 0, points_per_stroke, 2), dtype=torch.float32, device=device)
+        authors = torch.zeros((1, 0), dtype=torch.long, device=device)
+        order = torch.zeros((1, 0), dtype=torch.float32, device=device)
+        mask = torch.zeros((1, 0), dtype=torch.bool, device=device)
+    return {
+        "context_points": points,
+        "context_authors": authors,
+        "context_order": order,
+        "context_mask": mask,
+    }
+
+
+def tensor_to_co_points(
+    points: torch.Tensor,
+    *,
+    max_points: int,
+    canvas_width: float,
+    canvas_height: float,
+) -> list[dict[str, float]]:
+    values = points.detach().cpu()
+    count = max(2, int(max_points))
+    if values.shape[0] > count:
+        indices = torch.linspace(0, values.shape[0] - 1, count).round().long()
+        values = values[indices]
+    converted = []
+    for index, point in enumerate(values):
+        x, y = model_to_browser_point(
+            float(point[0].item()),
+            float(point[1].item()),
+            canvas_width=canvas_width,
+            canvas_height=canvas_height,
+        )
+        converted.append({
+            "x": clamp(x, 0.0, 1.0),
+            "y": clamp(y, 0.0, 1.0),
+            "t": index * 40,
+            "p": 0.5,
+        })
+    return converted
+
+
+def score_v4_candidate(
+    candidate: list[dict[str, float]],
+    references: list[dict[str, Any]],
+    last_human: dict[str, Any] | None,
+    *,
+    confidence: float,
+) -> dict[str, float]:
+    overlap = stroke_overlap_fraction(candidate, references, threshold=0.020)
+    human_overlap = stroke_overlap_fraction(candidate, [last_human] if last_human else [], threshold=0.022)
+    endpoint_distance, nearest_distance, center_distance = stroke_distance_metrics(candidate, references)
+    length = sum(
+        math.hypot(point["x"] - previous["x"], point["y"] - previous["y"])
+        for previous, point in zip(candidate, candidate[1:])
+    )
+    boundary_fraction = sum(
+        point["x"] <= 0.001 or point["x"] >= 0.999 or point["y"] <= 0.001 or point["y"] >= 0.999
+        for point in candidate
+    ) / max(len(candidate), 1)
+    short_penalty = max(0.0, 0.04 - length) * 30.0
+    trace_penalty = max(0.0, overlap - 0.22) * 3.2
+    human_trace_penalty = max(0.0, human_overlap - 0.25) * 4.0
+    isolation_penalty = max(0.0, nearest_distance - 0.12) * 5.0
+    composition_penalty = max(0.0, center_distance - 0.32) * 2.0
+    endpoint_connection_reward = max(0.0, 1.0 - endpoint_distance / 0.055) * 0.25
+    proximity_reward = max(0.0, 1.0 - nearest_distance / 0.08) * 0.20
+    score = (
+        0.12 * confidence
+        + endpoint_connection_reward
+        + proximity_reward
+        - trace_penalty
+        - human_trace_penalty
+        - isolation_penalty
+        - composition_penalty
+        - boundary_fraction
+        - short_penalty
+    )
+    return {
+        "score": score,
+        "overlap": overlap,
+        "humanOverlap": human_overlap,
+        "endpointDistance": endpoint_distance,
+        "nearestDistance": nearest_distance,
+        "centerDistance": center_distance,
+    }
+
+
+def stroke_distance_metrics(
+    candidate: list[dict[str, float]],
+    references: list[dict[str, Any]],
+) -> tuple[float, float, float]:
+    reference_points = [
+        (float(point.get("x", 0.0)), float(point.get("y", 0.0)))
+        for stroke in references
+        for point in stroke.get("points", [])
+    ]
+    if not candidate or not reference_points:
+        return 0.0, 0.0, 0.0
+
+    candidate_points = [(float(point["x"]), float(point["y"])) for point in candidate]
+
+    def nearest(point: tuple[float, float]) -> float:
+        return math.sqrt(min(
+            (point[0] - x) ** 2 + (point[1] - y) ** 2
+            for x, y in reference_points
+        ))
+
+    endpoint_distance = min(nearest(candidate_points[0]), nearest(candidate_points[-1]))
+    nearest_distance = min(nearest(point) for point in candidate_points)
+    candidate_center = (
+        sum(point[0] for point in candidate_points) / len(candidate_points),
+        sum(point[1] for point in candidate_points) / len(candidate_points),
+    )
+    reference_center = (
+        sum(point[0] for point in reference_points) / len(reference_points),
+        sum(point[1] for point in reference_points) / len(reference_points),
+    )
+    center_distance = math.hypot(
+        candidate_center[0] - reference_center[0],
+        candidate_center[1] - reference_center[1],
+    )
+    return endpoint_distance, nearest_distance, center_distance
+
+
+def stroke_overlap_fraction(
+    candidate: list[dict[str, float]],
+    references: list[dict[str, Any]],
+    *,
+    threshold: float,
+) -> float:
+    reference_points = [
+        (float(point.get("x", 0.0)), float(point.get("y", 0.0)))
+        for stroke in references
+        for point in stroke.get("points", [])
+    ]
+    if not candidate or not reference_points:
+        return 0.0
+    overlapping = 0
+    threshold_squared = threshold * threshold
+    for point in candidate:
+        if min(
+            (point["x"] - x) ** 2 + (point["y"] - y) ** 2
+            for x, y in reference_points
+        ) <= threshold_squared:
+            overlapping += 1
+    return overlapping / len(candidate)
+
+
 def stroke_author_type(stroke: dict[str, Any]) -> str:
     author = stroke.get("author", {})
     if isinstance(author, str):
@@ -793,9 +1240,11 @@ def sample_from_logits(logits: torch.Tensor, temperature: float, top_k: int | No
 def load_runtime(
     checkpoint_path: Path,
     device_name: str,
-) -> StrokeTransformerRuntime | Stroke5TransformerRuntime | PrimitiveModelRuntime:
+) -> StrokeTransformerRuntime | Stroke5TransformerRuntime | StrokeRelationalV4Runtime | PrimitiveModelRuntime:
     checkpoint = torch.load(checkpoint_path, map_location=device_name, weights_only=False)
     model_type = checkpoint.get("model_type", "stroke-transformer")
+    if model_type == "stroke-relational-v4":
+        return StrokeRelationalV4Runtime(checkpoint, checkpoint_path, device_name)
     if model_type == "stroke5-transformer-v3":
         return Stroke5TransformerRuntime(checkpoint, checkpoint_path, device_name)
     if model_type in {"sketchgpt-primitives", "sketchgpt-segments-v2"}:
@@ -804,7 +1253,7 @@ def load_runtime(
 
 
 def make_handler(
-    runtime: StrokeTransformerRuntime | Stroke5TransformerRuntime | PrimitiveModelRuntime,
+    runtime: StrokeTransformerRuntime | Stroke5TransformerRuntime | StrokeRelationalV4Runtime | PrimitiveModelRuntime,
 ) -> type[BaseHTTPRequestHandler]:
     class StrokeModelHandler(BaseHTTPRequestHandler):
         def do_OPTIONS(self) -> None:

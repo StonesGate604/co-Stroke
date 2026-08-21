@@ -140,12 +140,13 @@ function updateContextMessage(context, model) {
     return;
   }
 
-  const message = `Context: ${context.humanActionsUsed} human + ${context.aiActionsUsed} AI / ${context.maxActions}`;
+  const unit = context.unit === "strokes" ? "strokes" : "actions";
+  const message = `Context: ${context.humanActionsUsed} human + ${context.aiActionsUsed} AI / ${context.maxActions} ${unit}`;
   setContextMessage(message, context.compacted);
   dom.contextStat.title = [
     `Policy: ${context.policy}`,
-    `Human: ${context.humanActionsBefore} → ${context.humanActionsUsed} actions`,
-    `AI: ${context.aiActionsBefore} → ${context.aiActionsUsed} actions`,
+    `Human: ${context.humanActionsBefore} → ${context.humanActionsUsed} ${unit}`,
+    `AI: ${context.aiActionsBefore} → ${context.aiActionsUsed} ${unit}`,
     `Dropped AI strokes: ${context.droppedAIStrokes}`
   ].join("\n");
 }
