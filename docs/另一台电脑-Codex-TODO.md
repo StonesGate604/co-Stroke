@@ -40,6 +40,23 @@ python -m venv .venv
 
 ### 3. 下载 Quick, Draw! 猫类别训练数据
 
+推荐直接运行项目同步脚本。它会下载 Quick, Draw! 猫数据和当前正式 v4.1 checkpoint，并验证 checkpoint 的 SHA-256：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\sync_project_assets.ps1
+```
+
+仓库当前是私有仓库。同步脚本会安全地复用 Git Credential Manager 中已有的 GitHub 登录凭据，不会把 token 写进项目。因为另一台电脑需要先成功克隆这个私有仓库，所以正常情况下凭据已经存在；若脚本提示没有 GitHub credential，请先在该电脑上完成 GitHub 登录。
+
+如需同时下载 v3.1、v4.0.1、v4.1 三个正式 checkpoint：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\sync_project_assets.ps1 `
+  -IncludeAllFormalCheckpoints
+```
+
+以下是只下载训练数据时的手动方式：
+
 ```powershell
 New-Item -ItemType Directory -Force data\quickdraw
 Invoke-WebRequest `
@@ -52,7 +69,7 @@ Get-Item data\quickdraw\cat.ndjson | Select-Object FullName, Length
 
 ### 4. 恢复训练好的 v4.1 checkpoint
 
-从旧电脑、共享盘或 GitHub Release 下载下面的文件，并保持路径完全一致：
+上一步的同步脚本会从 GitHub Release 下载下面的文件并放到正确位置：
 
 ```text
 runs/stroke-multimodal-v41-cat/checkpoint.pt
@@ -148,4 +165,3 @@ http://127.0.0.1:8787/health
 - `http://127.0.0.1:8000/public/` 可访问；
 - `http://127.0.0.1:8787/health` 报告 v4.1；
 - AI Continue 的请求由本地模型服务响应，而不是 mock fallback。
-
